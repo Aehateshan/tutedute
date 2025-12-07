@@ -1,0 +1,198 @@
+Deploying a Scalable Blog Web Application on AWS: Complete Step-by-Step Guide
+
+The attached file "tutuduteexam.txt" contains a detailed AWS deployment tutorial for a production-ready blog application. Below is the human-readable, properly formatted version with clear sections, corrected code blocks, and readable instructions.
+
+===============================================================================
+AWS Account & IAM Foundation
+===============================================================================
+
+Start by creating a new AWS account at aws.amazon.com and immediately enable MFA for the root user: 
+My Security Credentials → Assign MFA device → scan QR code with authenticator app.
+
+Create IAM users (e.g., "blog-admin", "blog-dev") with Access Key/Secret and console password, then craft custom policies like:
+
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["ec2:*", "s3:*", "rds:*", "elasticloadbalancing:*"],
+    "Resource": "*"
+  }]
+}
+
+Attach policies to users and enforce MFA via condition: "Bool": {"aws:MultiFactorAuthPresent": "true"}.
+
+===============================================================================
+Networking & Compute Infrastructure
+===============================================================================
+
+Launch VPC wizard (VPC with Public/Private Subnets): 
+CIDR 10.0.0.0/16, 
+public subnets 10.0.1.0/24 (us-east-1a), 10.0.2.0/24 (us-east-1b), 
+private 10.0.3.0/24, 10.0.4.0/24; 
+enable Auto-assign Public IP. 
+
+Attach Internet Gateway and update public route table (0.0.0.0/0 → IGW).
+
+Launch t3.micro EC2 (Amazon Linux 2023) in public subnet us-east-1a, user data script:
+
+#!/bin/bash
+yum update -y
+yum install httpd -y
+systemctl start httpd
+systemctl enable httpd
+echo "<h1>Blog App Live!</h1>" > /var/www/html/index.html
+
+Security group: HTTP 80, SSH 22 (your IP). 
+Create 10GB gp3 EBS volume, attach to instance (device /dev/sdf), 
+SSH in: lsblk, sudo mkfs -t xfs /dev/xvdf, sudo mkdir /blog-data, 
+sudo mount /dev/xvdf /blog-data, 
+echo '/dev/xvdf /blog-data xfs defaults,nofail 0 2' >> /etc/fstab.
+
+===============================================================================
+Scalability with ALB
+===============================================================================
+
+Create Target Group "blog-targets" (HTTP 80, health check /index.html), register EC2 instance. 
+Launch internet-facing ALB "blog-alb" across public subnets, 
+listener HTTP:80 → target group, security group HTTP/HTTPS inbound. 
+Test: ALB DNS → "Blog App Live!" confirms connectivity.
+
+===============================================================================
+S3 Storage & RDS Database
+===============================================================================
+
+Create S3 bucket "blog-static-files-[accountid]", 
+Properties → Versioning (Enable), Default encryption (AES-256). 
+Upload images via Console, set policy for public read on static/ prefix.
+
+Launch RDS MySQL db.t3.micro (Multi-AZ), private subnets, 
+VPC security group "rds-sg" (3306 inbound from EC2 security group), master username/password.
+
+From EC2: 
+sudo yum install mysql
+mysql -h <rds-endpoint> -u admin -p
+CREATE DATABASE blogdb;
+
+Update EC2 app to connect: mysqli_connect($endpoint, $user, $pass, 'blogdb').
+
+===============================================================================
+Serverless Decoupling Layer
+===============================================================================
+
+SNS Notifications: 
+Create topic "BlogPostNotifications", subscribe your email → publish test message.
+
+SQS Background Queue: 
+Standard queue "BackgroundTasksQueue", access policy allowing EC2 role.
+
+Lambda Image Resizer: 
+Python 3.12 function "image-resizer", code:
+
+import json
+import boto3
+from PIL import Image
+import io
+
+s3 = boto3.client('s3')
+
+def lambda_handler(event, context):
+    bucket = event['Records'][0]['s3']['bucket']['name']
+    key = event['Records'][0]['s3']['object']['key']
+    
+    response = s3.get_object(Bucket=bucket, Key=key)
+    image = Image.open(io.BytesIO(response['Body'].read()))
+    image.thumbnail((800, 600))
+    
+    thumb_key = f"thumbs/{key}"
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='JPEG', quality=80)
+    s3.put_object(Bucket=bucket, Key=thumb_key, Body=img_byte_arr.getvalue())
+
+Add S3 trigger (ObjectCreated on images/*).
+
+===============================================================================
+Domain & CDN Delivery
+===============================================================================
+
+Route53 → Register domain "yourblog.com" ($12/year). 
+Hosted Zone → Create A record alias → select blog-alb 
+(dualstack.blog-alb-xxx.elb.us-east-1.amazonaws.com).
+
+CloudFront distribution: 
+Origin "blog-static-files-[accountid].s3.amazonaws.com" (OAI), 
+Default (*) → S3 origin path /static, 
+SSL Certificate (ACM us-east-1), Alternate Domain blog.yourblog.com. 
+Invalidate cache post-deploy.
+
+===============================================================================
+Monitoring, Security & Encryption
+===============================================================================
+
+CloudWatch: 
+Alarms → EC2 CPUUtilization >80% (SNS notify), 
+RDS FreeStorageSpace <10GB, ALB TargetResponseTime >5s. 
+Enable ALB access logs (S3 bucket), RDS Enhanced Monitoring.
+
+WAF: 
+Create Web ACL "blog-waf", associate ALB, 
+add AWS Managed Rules (SQLi, XSS, Size Restrictions).
+
+KMS Encryption: 
+Create CMK "blog-kms-key", update S3 bucket policy:
+
+{
+  "Statement": [{
+    "Effect": "Deny",
+    "Principal": "*",
+    "Action": "s3:PutObject",
+    "Resource": "arn:aws:s3:::blog-static-files-*/*",
+    "Condition": {
+      "StringNotEquals": {
+        "s3:x-amz-server-side-encryption": "aws:kms",
+        "s3:x-amz-kms-key-id": "arn:aws:kms:us-east-1:xxx:key/xxx"
+      }
+    }
+  }]
+}
+
+===============================================================================
+IaC Automation with CloudFormation
+===============================================================================
+
+s3-template.yaml:
+
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  BucketName:
+    Type: String
+Resources:
+  BlogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID: alias/aws/s3
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+
+Deploy: 
+aws cloudformation create-stack --stack-name BlogS3 --template-body file://s3-template.yaml --parameters ParameterKey=BucketName,ParameterValue=blog-iac-bucket.
+
+===============================================================================
+Production Validation Checklist
+===============================================================================
+
+- Domain resolves to ALB → EC2 blog page
+- S3 images auto-resize via Lambda → thumbs/ prefix
+- New EC2 scales behind ALB health checks
+- CloudWatch alarms trigger SNS on CPU>80%
+- WAF blocks SQL injection attempts
+- KMS enforces encryption on S3 uploads
+
+Source: tutuduteexam.txt [file:31]
