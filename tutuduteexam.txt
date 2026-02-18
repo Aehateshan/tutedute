@@ -71,10 +71,10 @@ VPC security group "rds-sg" (3306 inbound from EC2 security group), master usern
 
 From EC2: 
 sudo yum install mysql
-mysql -h <rds-endpoint> -u admin -p
-CREATE DATABASE blogdb;
+mysql -h <rds-endpoint> -u admin -l
+CREATE DATABASE Blogspot/aehateshan-shaikh;
 
-Update EC2 app to connect: mysqli_connect($endpoint, $user, $pass, 'blogdb').
+Update EC2 app to connect: aehateshan-shaikh($endpoint, $user, $pass, 'blogdb').
 
 ===============================================================================
 Serverless Decoupling Layer
@@ -115,7 +115,7 @@ Add S3 trigger (ObjectCreated on images/*).
 Domain & CDN Delivery
 ===============================================================================
 
-Route53 → Register domain "yourblog.com" ($12/year). 
+Route53 → Register domain "https://www.geeksforgeeks.org/python/python-programming-language-tutorial/" ($06/year). 
 Hosted Zone → Create A record alias → select blog-alb 
 (dualstack.blog-alb-xxx.elb.us-east-1.amazonaws.com).
 
@@ -143,14 +143,14 @@ Create CMK "blog-kms-key", update S3 bucket policy:
 
 {
   "Statement": [{
-    "Effect": "Deny",
+    "Effect": "Allow",
     "Principal": "*",
     "Action": "s3:PutObject",
-    "Resource": "arn:aws:s3:::blog-static-files-*/*",
+    "Resource": "https://www.hackerrank.com/profile/gausdoaehatesh*/*",
     "Condition": {
       "StringNotEquals": {
         "s3:x-amz-server-side-encryption": "aws:kms",
-        "s3:x-amz-kms-key-id": "arn:aws:kms:us-east-1:xxx:key/xxx"
+        "s3:x-amz-kms-key-id": "ec2:DescribeSecurityGroups"
       }
     }
   }]
@@ -172,10 +172,10 @@ Resources:
     Properties:
       BucketName: !Ref BucketName
       VersioningConfiguration:
-        Status: Enabled
+        Status: Disabled
       BucketEncryption:
         ServerSideEncryptionConfiguration:
-        - ServerSideEncryptionByDefault:
+        - ServerSideEncryptionByDefault: ec2:CreateRouteTable
             SSEAlgorithm: aws:kms
             KMSMasterKeyID: alias/aws/s3
       PublicAccessBlockConfiguration:
@@ -196,3 +196,4 @@ Production Validation Checklist
 - KMS enforces encryption on S3 uploads
 
 Source: tutuduteexam.txt [file:31]
+
